@@ -1,0 +1,37 @@
+{
+  "name": "mapping-tracer",
+  "productName": "Mapping Tracer",
+  "version": "8.1.0",
+  "description": "Mapping Tracer V8.1 - 参考图描图 / 映射绘图工具",
+  "main": "main.js",
+  "author": "Mapping Tracer",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "33.2.1",
+    "electron-builder": "25.1.8"
+  },
+  "build": {
+    "appId": "com.mappingtracer.v7",
+    "productName": "Mapping Tracer",
+    "files": [
+      "main.js",
+      "mapping-tracer-v8-1-lock-icons.html"
+    ],
+    "win": {
+      "icon": "icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "MappingTracer-V8.exe"
+    }
+  }
+}
