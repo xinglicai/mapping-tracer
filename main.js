@@ -30,7 +30,7 @@ function createWindow () {
     }
   });
 
-  win.loadFile(path.join(__dirname, 'mapping-tracer-v8-1-lock-icons.html'));
+  win.loadFile(path.join(__dirname, 'mapping-tracer-v8-2-point-editor.html'));
 }
 
 app.whenReady().then(() => {

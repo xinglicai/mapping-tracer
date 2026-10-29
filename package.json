@@ -1,8 +1,8 @@
 {
   "name": "mapping-tracer",
   "productName": "Mapping Tracer",
-  "version": "8.1.0",
-  "description": "Mapping Tracer V8.1 - 参考图描图 / 映射绘图工具",
+  "version": "8.2.0",
+  "description": "Mapping Tracer V8.2 - 参考图描图 / 映射绘图工具（终版）",
   "main": "main.js",
   "author": "Mapping Tracer",
   "license": "MIT",
@@ -19,7 +19,7 @@
     "productName": "Mapping Tracer",
     "files": [
       "main.js",
-      "mapping-tracer-v8-1-lock-icons.html"
+      "mapping-tracer-v8-2-point-editor.html"
     ],
     "win": {
       "icon": "icon.ico",
@@ -31,7 +31,7 @@
       ]
     },
     "portable": {
-      "artifactName": "MappingTracer-V8.exe"
+      "artifactName": "MappingTracer-V8.2.exe"
     }
   }
 }

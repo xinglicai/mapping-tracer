@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-<title>Mapping Tracer V8.1 · 图层锁定图标优化</title>
+<title>Mapping Tracer V8.2 · 右键新增点与删除点</title>
 <style>
   /* ============================================================
    * 主题变量（Dark Mode）
@@ -1061,7 +1061,7 @@
   <header>
     <div class="grow">
       <div class="title">MAPPING TRACER</div>
-      <div class="sub">3D Mapping 描图工作台 · V8.1</div>
+      <div class="sub">3D Mapping 描图工作台 · V8.2</div>
     </div>
     <button class="quick-export-btn" id="btnQuickExport" type="button" title="快速导出 PNG（使用当前导出设置）" aria-label="快速导出 PNG"><span>PNG</span><span class="quick-arrow">↓</span></button>
     <button class="icon-btn pin-btn pinned" id="btnPin" type="button" title="已固定面板，点击解锁拖动" aria-label="固定工具面板" aria-pressed="true">
@@ -1200,7 +1200,7 @@
       <button data-ntype="smooth" disabled>平滑</button>
       <button data-ntype="asymmetric" disabled>非对称</button>
     </div>
-    <p class="hint">右键节点切换类型；方向键微调（Shift ×10）。选中的点可高对比闪烁，方便投影描绘。</p>
+    <p class="hint"><b>右键线段 → 新增点</b>，<b>右键节点 → 删除点</b>；拖动节点调整形状。方向键微调（Shift ×10），支持闪烁定位。</p>
     <div class="row mt"><label class="check"><input type="checkbox" id="blinkOn" checked> 投影闪烁定位点</label></div>
     <details class="sub-disclosure" id="blinkSettings">
       <summary><span>闪烁频率 / 大小 / 颜色</span><span class="micro-note">投影定位设置</span></summary>
@@ -2885,15 +2885,25 @@
       }
     }
 
-    for (let i=0; !s.mesh && i<s.nodes.length; i++){
-      const n=s.nodes[i];
-      const isSel = i === selectedNode;
-      if (s.kind !== 'poly' && s.kind !== 'pen' && !isSel) continue;
-      drawNodeMarker(n, worldToScreen(n.x, n.y), isSel);
+    if(s.mesh){
+      // Show the actual warped contour points after add/delete. They remain
+      // editable through the context menu without flattening the grid.
+      const original=s.mesh.sourceNodes||s.nodes;
+      for(let i=0;i<original.length;i++){
+        const n=original[i],isSel=i===selectedNode;
+        if(s.kind!=='poly'&&s.kind!=='pen'&&!isSel)continue;
+        const pt=meshPointOnShape(s.mesh,n);
+        drawNodeMarker(n,worldToScreen(pt.x,pt.y),isSel);
+      }
+    }else{
+      for(let i=0;i<s.nodes.length;i++){
+        const n=s.nodes[i],isSel=i===selectedNode;
+        if(s.kind!=='poly'&&s.kind!=='pen'&&!isSel)continue;
+        drawNodeMarker(n,worldToScreen(n.x,n.y),isSel);
+      }
+      if(selectedNode>=0&&s.nodes[selectedNode])
+        drawNodeHandles(s,selectedNode);
     }
-
-    if(!s.mesh && selectedNode>=0 && s.nodes[selectedNode])
-      drawNodeHandles(s,selectedNode);
   }
 
   /** 参考图四边 + 4 角点（变形）+ 4 边中点（缩放） */
@@ -3828,23 +3838,162 @@
     deleteShapeById(selectedId);
   }
 
-  function deleteSelectedNode() {
-    const s = getSelected();
-    if(!s||selectedNode<0)return;
-    if(isLayerLocked(s.id)){flashHud('图层已锁定');return;}
-    if (s.kind === 'rect' || s.kind === 'ellipse') {
-      toast('矩形/椭圆请用包围盒手柄调整，或先把节点改成平滑/非对称');
-      return;
+
+  /* ===================== 路径右键编辑 =====================
+   * New nodes subdivide the EXACT Bézier segment by de Casteljau,
+   * preserving both the original curve and all layer appearance.
+   * Shape meshes stay non-destructive: split their source paths
+   * instead of flattening the grid deformation.
+   */
+  function cubicAt(a,b,t){
+    const q=1-t,qq=q*q,tt=t*t;
+    return {
+      x:qq*q*a.x+3*qq*t*a.ox+3*q*tt*b.ix+tt*t*b.x,
+      y:qq*q*a.y+3*qq*t*a.oy+3*q*tt*b.iy+tt*t*b.y
+    };
+  }
+  function closestEditableSegment(s,p,tolerancePx=14){
+    if(!s||!s.nodes||s.nodes.length<2)return null;
+    const nodes=s.mesh?.sourceNodes||s.nodes;
+    const count=s.closed===false?nodes.length-1:nodes.length;
+    if(count<=0)return null;
+    const inv=s.mesh?invert3(quadHomography(s.mesh.baseQuad)):null;
+    const sample=(index,t)=>{
+      const world=cubicAt(nodes[index],nodes[(index+1)%nodes.length],t);
+      if(!s.mesh||!inv)return world;
+      const uv=applyH(inv,world.x,world.y);
+      return meshSampleWorld(s.mesh.points,s.mesh.size,uv.x,uv.y,
+        s.mesh.interpolation||'smooth');
+    };
+    let best=null;
+    const N=25;
+    for(let i=0;i<count;i++){
+      let closest=Infinity,at=0;
+      for(let j=0;j<=N;j++){
+        const t=j/N;
+        const dist=d2(sample(i,t),p);
+        if(dist<closest){closest=dist;at=j;}
+      }
+      // A local 1-D minimum search gives subpixel placement on curves.
+      let left=Math.max(0,(at-1)/N),right=Math.min(1,(at+1)/N);
+      const phi=.6180339887498949;
+      let x=right-(right-left)*phi,y=left+(right-left)*phi;
+      let dx=d2(sample(i,x),p),dy=d2(sample(i,y),p);
+      for(let k=0;k<23;k++){
+        if(dx<=dy){right=y;y=x;dy=dx;x=right-(right-left)*phi;dx=d2(sample(i,x),p);}
+        else{left=x;x=y;dx=dy;y=left+(right-left)*phi;dy=d2(sample(i,y),p);}
+      }
+      const t=Math.max(.001,Math.min(.999,(left+right)/2));
+      const hit=sample(i,t);
+      const distance=Math.sqrt(d2(hit,p))*view.scale;
+      if(!best||distance<best.distancePx)
+        best={segmentIndex:i,t,distancePx:distance,world:hit};
     }
-    if (s.nodes.length <= 3) { toast('闭合路径至少需要 3 个节点'); return; }
+    return best&&best.distancePx<=tolerancePx?best:null;
+  }
+
+  function closestEditableSegmentAnywhere(s,p){
+    return closestEditableSegment(s,p,Number.POSITIVE_INFINITY);
+  }
+
+  function hitEditableNode(s,p,radius=HIT_R+2){
+    if(!s||!s.nodes)return -1;
+    const nodes=s.mesh?.sourceNodes||s.nodes;
+    for(let i=nodes.length-1;i>=0;i--){
+      const n=nodes[i];
+      const world=s.mesh?meshPointOnShape(s.mesh,n):n;
+      const pixel=worldToScreen(world.x,world.y);
+      if(near(p.sx,p.sy,pixel.x,pixel.y,radius))return i;
+    }
+    return -1;
+  }
+
+  function splitBezierNodes(nodes,index,t){
+    if(!nodes||nodes.length<2||index<0||index>=nodes.length)return -1;
+    const next=(index+1)%nodes.length;
+    const a=nodes[index],b=nodes[next];
+    const p0={x:a.x,y:a.y},p1={x:a.ox,y:a.oy},
+      p2={x:b.ix,y:b.iy},p3={x:b.x,y:b.y};
+    const interp=(v,w)=>({x:v.x+(w.x-v.x)*t,y:v.y+(w.y-v.y)*t});
+    const q0=interp(p0,p1),q1=interp(p1,p2),q2=interp(p2,p3);
+    const r0=interp(q0,q1),r1=interp(q1,q2),where=interp(r0,r1);
+    const straight=d2(p0,p1)<1e-12&&d2(p2,p3)<1e-12;
+    let inserted;
+    if(straight){
+      // The original stroke is a line. Keep its corner semantics:
+      // inserting a control point cannot introduce a curve.
+      inserted=cornerNode(where.x,where.y);
+    }else{
+      a.ox=q0.x;a.oy=q0.y;
+      b.ix=q2.x;b.iy=q2.y;
+      const leftLen=Math.hypot(where.x-r0.x,where.y-r0.y);
+      const rightLen=Math.hypot(r1.x-where.x,r1.y-where.y);
+      const type=Math.abs(leftLen-rightLen)>Math.max(leftLen,rightLen)*.02?
+        'asymmetric':'smooth';
+      inserted=handleNode(where.x,where.y,r0.x,r0.y,r1.x,r1.y,type);
+    }
+    nodes.splice(index+1,0,inserted);
+    return index+1;
+  }
+
+  function insertPointOnShape(s,segmentIndex,t){
+    if(!s||isLayerLocked(s.id)){
+      flashHud('图层已锁定，不能新增点');return false;
+    }
+    const total=s.closed===false?s.nodes.length-1:s.nodes.length;
+    if(!Number.isInteger(segmentIndex)||segmentIndex<0||segmentIndex>=total)
+      return false;
+    const at=clamp(Number(t)||.5,.025,.975);
     pushHistory();
-    s.nodes.splice(selectedNode, 1);
+    if(s.mesh?.sourceNodes){
+      // Both representations retain matching node indices.
+      splitBezierNodes(s.mesh.sourceNodes,segmentIndex,at);
+    }
+    const index=splitBezierNodes(s.nodes,segmentIndex,at);
+    if(index<0)return false;
+    detachKindIfNeeded(s);
     delete s.transformQuad;
-    selectedNode = clamp(selectedNode, 0, s.nodes.length - 1);
-    syncLayers();
-    syncNodePanel();
+    selectedNode=index;
+    syncLayers();syncNodePanel();smartOpenPanel('nodes');
     requestRender();
-    flashHud('已删除节点');
+    flashHud('已新增节点 '+(index+1)+' / '+s.nodes.length+' · Ctrl+Z 撤销');
+    return true;
+  }
+
+  function removePointFromShape(s,index){
+    if(!s||isLayerLocked(s.id)){
+      flashHud('图层已锁定，不能删除点');return false;
+    }
+    const min=s.closed===false?2:3;
+    if(s.nodes.length<=min){
+      toast((s.closed===false?'开放路径至少需要 2':'闭合路径至少需要 3')+
+        ' 个节点');
+      return false;
+    }
+    if(!Number.isInteger(index)||index<0||index>=s.nodes.length)return false;
+    pushHistory();
+    if(s.mesh?.sourceNodes)s.mesh.sourceNodes.splice(index,1);
+    s.nodes.splice(index,1);
+    detachKindIfNeeded(s);
+    delete s.transformQuad;
+    selectedNode=Math.min(index,s.nodes.length-1);
+    syncLayers();syncNodePanel();smartOpenPanel('nodes');
+    requestRender();
+    flashHud('已删除节点 · Ctrl+Z 可撤销');
+    return true;
+  }
+
+  function addPointNextToNode(s,index){
+    if(!s)return false;
+    const total=s.closed===false?s.nodes.length-1:s.nodes.length;
+    if(total<1)return false;
+    const segment=Math.min(index,total-1);
+    return insertPointOnShape(s,segment,.5);
+  }
+
+  function deleteSelectedNode(){
+    const s=getSelected();
+    if(s&&selectedNode>=0)removePointFromShape(s,selectedNode);
   }
 
   /* ============================== 11. 撤销历史 ============================== */
@@ -5567,20 +5716,36 @@
                 '<span class="swatch ' + (t === 'corner' ? 'corner' : t === 'smooth' ? 'smooth' : 'asym') + '"></span>' +
                 NODE_TYPE_LABEL[t] + '</div>';
       }
-      html += transformMenuItems();
-      html += '<div class="ctx-sep"></div>';
-      html += '<div class="ctx-item danger' + (s.nodes.length <= 3 ? ' disabled' : '') +
-              '" data-act="delete-node">删除该节点</div>';
-    } else if (target.kind === 'shape' && s) {
-      html += '<div class="ctx-title">' + escapeHTML(s.name) + '</div>';
-      html += transformMenuItems();
-      html += '<div class="ctx-sep"></div>';
-      html += '<div class="ctx-item" data-act="all-smooth">全部转为平滑</div>';
-      html += '<div class="ctx-item" data-act="all-corner">全部转为尖角</div>';
-      html += '<div class="ctx-sep"></div>';
-      html += '<div class="ctx-item" data-act="toggle-visible">' +
-              (isVisible(s) ? '隐藏该图层' : '显示该图层') + '</div>';
-      html += '<div class="ctx-item danger" data-act="delete-shape">删除图形</div>';
+      const frozen=isLayerLocked(s.id);
+      const minimum=s.closed===false?2:3;
+      html+='<div class="ctx-sep"></div>'+
+        '<div class="ctx-title">路径编辑</div>'+
+        '<div class="ctx-item'+(frozen?' disabled':'')+
+          '" data-act="insert-node">＋　新增点（下一段中点）</div>'+
+        '<div class="ctx-item danger'+
+          (frozen||s.nodes.length<=minimum?' disabled':'')+
+          '" data-act="delete-node">−　删除点</div>';
+      html+=transformMenuItems();
+    } else if ((target.kind==='shape'||target.kind==='segment') && s) {
+      const frozen=isLayerLocked(s.id);
+      const minimum=s.closed===false?2:3;
+      const canInsert=Number.isInteger(target.segmentIndex)&&
+        target.segmentIndex<(s.closed===false?s.nodes.length-1:s.nodes.length);
+      const canDelete=selectedNode>=0&&s.nodes.length>minimum;
+      html+='<div class="ctx-title">'+escapeHTML(s.name)+'</div>'+
+        '<div class="ctx-item'+(!canInsert||frozen?' disabled':'')+
+          '" data-act="insert-node">＋　新增点（此处路径）</div>'+
+        '<div class="ctx-item danger'+(!canDelete||frozen?' disabled':'')+
+          '" data-act="delete-node">−　删除选中点</div>'+
+        '<div class="ctx-sep"></div>';
+      html+=transformMenuItems();
+      html+='<div class="ctx-sep"></div>';
+      html+='<div class="ctx-item" data-act="all-smooth">全部转为平滑</div>';
+      html+='<div class="ctx-item" data-act="all-corner">全部转为尖角</div>';
+      html+='<div class="ctx-sep"></div>';
+      html+='<div class="ctx-item" data-act="toggle-visible">'+
+        (isVisible(s)?'隐藏该图层':'显示该图层')+'</div>';
+      html+='<div class="ctx-item danger" data-act="delete-shape">删除图形</div>';
     }
 
     ctxMenu.innerHTML = html;
@@ -5620,16 +5785,20 @@
     const s=getSelected();
     if (!s) {closeCtxMenu();return;}
 
-    if (item.dataset.ntype) {
+    if(item.dataset.act==='insert-node'){
+      if(target.kind==='node')addPointNextToNode(s,target.index);
+      else if(Number.isInteger(target.segmentIndex))
+        insertPointOnShape(s,target.segmentIndex,target.t);
+    } else if(item.dataset.act==='delete-node'){
+      const index=target.kind==='node'?target.index:selectedNode;
+      if(index>=0)removePointFromShape(s,index);
+    } else if(item.dataset.ntype){
+      if(isLayerLocked(s.id)){flashHud('图层已锁定');closeCtxMenu();return;}
       pushHistory();
-      setNodeType(s, ctxTarget.index, item.dataset.ntype);
-      selectedNode = ctxTarget.index;
-      syncNodePanel();
-      requestRender();
-      flashHud('节点类型：' + NODE_TYPE_LABEL[item.dataset.ntype]);
-    } else if (item.dataset.act === 'delete-node') {
-      selectedNode = ctxTarget.index;
-      deleteSelectedNode();
+      setNodeType(s,target.index,item.dataset.ntype);
+      selectedNode=target.index;
+      syncNodePanel();requestRender();
+      flashHud('节点类型：'+NODE_TYPE_LABEL[item.dataset.ntype]);
     } else if (item.dataset.act === 'delete-shape') {
       deleteShapeById(s.id);
     } else if (item.dataset.act === 'toggle-visible') {
@@ -5648,18 +5817,39 @@
     closeCtxMenu();
   });
 
-  stage.addEventListener('contextmenu', (e) => {
+  stage.addEventListener('contextmenu',(e)=>{
     e.preventDefault();
-    const p = localPoint(e);
-    cursorW = p;
+    const p=localPoint(e);
+    cursorW=p;
     const guide=hitGuide(p);
-    if (guide) {
+    if(guide){
       selectedGuideId=guide.id;
       smartOpenPanel('guides');
       openCtxMenu(e.clientX,e.clientY,{kind:'guide',id:guide.id});
       requestRender();return;
     }
 
+    // Selected path has priority near its visible outline, so a reference
+    // photo under or over the path cannot prevent editing vector nodes.
+    const selected=getSelected();
+    if(selected&&isVisible(selected)&&!draft){
+      const nodeIndex=hitEditableNode(selected,p);
+      if(nodeIndex>=0){
+        selectedNode=nodeIndex;
+        syncNodePanel();smartOpenPanel('nodes');requestRender();
+        openCtxMenu(e.clientX,e.clientY,{kind:'node',index:nodeIndex});
+        return;
+      }
+      const segment=closestEditableSegment(selected,p,15);
+      if(segment){
+        openCtxMenu(e.clientX,e.clientY,{
+          kind:'segment',segmentIndex:segment.segmentIndex,t:segment.t
+        });
+        return;
+      }
+    }
+
+    // The actual topmost image still has its regular transform menu.
     const topmost=hitTopLayerAt(p);
     if(topmost?.kind==='image'){
       const im=getImageById(topmost.id);
@@ -5670,34 +5860,44 @@
         return;
       }
     }
-    const sel = getSelected();
-    if (sel && isVisible(sel) && !draft) {
-      const ni = hitNode(sel, p);
-      if (ni >= 0) {
-        if(selectedNode!==ni){selectedNode=ni;syncNodePanel();requestRender();}
-        smartOpenPanel('nodes');
-        openCtxMenu(e.clientX,e.clientY,{kind:'node',index:ni});
-        return;
-      }
-    }
 
-    const hit = hitShapeAt(p, 9);
-    if (hit) {
-      if (hit.id !== selectedId) selectShape(hit);
-      // 隐藏图层被点中时，先让它可见便于操作
-      if (!isVisible(hit)) toggleShapeVisible(hit.id);
-      const ni2 = hitNode(hit, p);
-      if (ni2 >= 0) {
-        selectedNode=ni2;
-        syncNodePanel();requestRender();
-        smartOpenPanel('nodes');
-        openCtxMenu(e.clientX,e.clientY,{kind:'node',index:ni2});
-      } else {
-        openCtxMenu(e.clientX, e.clientY, { kind: 'shape' });
+    const hit=hitShapeAt(p,9);
+    if(hit){
+      if(hit.id!==selectedId)selectShape(hit);
+      if(!isVisible(hit))toggleShapeVisible(hit.id);
+      const nodeIndex=hitEditableNode(hit,p);
+      if(nodeIndex>=0){
+        selectedNode=nodeIndex;syncNodePanel();smartOpenPanel('nodes');
+        requestRender();
+        openCtxMenu(e.clientX,e.clientY,{kind:'node',index:nodeIndex});
+      }else{
+        // Right-clicking the outline inserts exactly there. Right-clicking
+        // inside a filled shape projects to its closest outline segment.
+        const nearest=closestEditableSegmentAnywhere(hit,p);
+        if(nearest){
+          openCtxMenu(e.clientX,e.clientY,{
+            kind:'segment',segmentIndex:nearest.segmentIndex,t:nearest.t
+          });
+        }else{
+          openCtxMenu(e.clientX,e.clientY,{kind:'shape'});
+        }
       }
       return;
     }
-    if (image.el && isInsideImage(p)) {
+    // Supports a narrow outline hit target even for non-filled vector paths.
+    const layers=flattenVisibleLayers().filter(n=>n.kind==='shape').reverse();
+    for(const node of layers){
+      const s=shapes.find(sh=>sh.id===node.id);
+      if(!s)continue;
+      const segment=closestEditableSegment(s,p,12);
+      if(!segment)continue;
+      if(s.id!==selectedId)selectShape(s);
+      openCtxMenu(e.clientX,e.clientY,{
+        kind:'segment',segmentIndex:segment.segmentIndex,t:segment.t
+      });
+      return;
+    }
+    if(image.el&&isInsideImage(p)){
       openCtxMenu(e.clientX,e.clientY,{kind:'image'});
       return;
     }
@@ -6645,7 +6845,7 @@
     syncImagePanel();
     toolbar.classList.add('open');
     render();
-    flashHud('V8 · 智能匹配工具面板 · 钢笔拖动生成贝塞尔手柄 · Shift 角度吸附',6000);
+    flashHud('V8.2 · 右键线段新增点 · 右键节点删除点 · 支持贝塞尔路径与 Ctrl+Z 撤销',6000);
   }
 
   boot();

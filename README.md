@@ -1,4 +1,4 @@
-# Mapping Tracer V8.1
+# Mapping Tracer V8.2（终版）
 
 一款面向投影描绘 / 图案映射场景的专业描图工具。基于 Web 技术构建，通过 Electron 打包为 Windows 桌面应用：**双击启动即默认全屏运行**，无需安装、无需浏览器。
 
@@ -39,7 +39,9 @@
 
 ### 06 节点编辑
 - 尖角 / 平滑 / 非对称三种节点类型，右键快速切换
-- 方向键微调节点（按住 `Shift` 步进 ×10）
+- **右键线段 → 新增点**：在路径任意位置插入节点（空白处右键插入到下一段中点）
+- **右键节点 → 删除点**：快速移除多余节点，支持贝塞尔路径
+- 拖动节点调整形状，方向键微调节点（按住 `Shift` 步进 ×10）
 - **投影闪烁定位点**：选中节点高对比闪烁（频率 / 大小 / 颜色可调），方便投影对位描绘
 
 ### 07 图形样式
@@ -81,7 +83,7 @@
 
 ## 桌面版说明（Electron 打包）
 
-- **便携单文件 exe**：`MappingTracer-V8.exe`，双击即用，无需安装运行时
+- **便携单文件 exe**：`MappingTracer-V8.2.exe`，双击即用，无需安装运行时
 - **默认全屏启动**，按 `F11` 可还原为窗口模式
 - **按 `Esc` 退出程序**：Esc 优先用于逐级取消当前状态（取消绘制 / 退出变换 / 取消节点选择等），当没有可取消状态时才退出应用，浏览器中打开该页面则不受影响
 - 应用图标：`mapping.png`（已转换为多尺寸 `icon.ico`）
@@ -92,14 +94,13 @@
 
 ```
 19mapping-tracer/
-├── mapping-tracer-v8-1-lock-icons.html  # 应用本体（单文件 Web 应用，V8.1）
-├── mapping-tracer-v7-streamlined.html   # 旧版本（V7，保留存档）
+├── mapping-tracer-v8-2-point-editor.html  # 应用本体（单文件 Web 应用，V8.2 终版）
 ├── mapping.png                          # 应用图标源文件
 ├── icon.ico                             # 打包用多尺寸图标（由 PNG 生成）
 ├── main.js                              # Electron 主进程（全屏启动、F11 切换）
 ├── package.json                         # 打包配置（electron-builder）
 ├── dist/                                # 构建产物输出目录
-│   └── MappingTracer-V8.exe             # 便携版可执行文件
+│   └── MappingTracer-V8.2.exe           # 便携版可执行文件（终版）
 └── README.md
 ```
 
